@@ -1,4 +1,5 @@
 import objectTrait from "../Decorators/objectTrait";
+import primitiveArrayTrait from "../Decorators/primitiveArrayTrait";
 import primitiveTrait from "../Decorators/primitiveTrait";
 import ModelTraits from "../ModelTraits";
 import { traitClass } from "../Trait";
@@ -10,7 +11,48 @@ import LegendOwnerTraits from "./LegendOwnerTraits";
 import MappableTraits from "./MappableTraits";
 import UrlTraits from "./UrlTraits";
 
+export class CogSingleBandRenderOptionsTraits extends ModelTraits {
+  @primitiveTrait({
+    type: "number",
+    name: "Band",
+    description: "The one-based band index to render. Defaults to 1."
+  })
+  band?: number;
+
+  @primitiveArrayTrait({
+    type: "number",
+    name: "Domain",
+    description:
+      "Fixed grayscale stretch as [minimum, maximum], with two finite values and minimum less than maximum. If omitted, the range is determined from the TIFF."
+  })
+  domain?: number[];
+
+  @primitiveArrayTrait({
+    type: "number",
+    name: "Bin edges",
+    description:
+      "Strictly increasing finite bin edges. Requires one binColor per interval. Cannot be combined with domain. Values outside the edges use the nearest end color."
+  })
+  binEdges?: number[];
+
+  @primitiveArrayTrait({
+    type: "string",
+    name: "Bin colors",
+    description:
+      "Opaque colors in #RRGGBB format, one per interval in binEdges. Intervals include their lower edge but exclude their upper edge, except the final interval."
+  })
+  binColors?: string[];
+}
+
 export class CogRenderOptionsTraits extends ModelTraits {
+  @objectTrait({
+    type: CogSingleBandRenderOptionsTraits,
+    name: "Single Band",
+    description:
+      "Single-band rendering options. Do not combine with convertToRGB: true."
+  })
+  single?: CogSingleBandRenderOptionsTraits;
+
   @primitiveTrait({
     type: "number",
     name: "No Data Value",

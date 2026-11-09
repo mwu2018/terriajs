@@ -11,11 +11,18 @@ import GeographicTilingScheme from "terriajs-cesium/Source/Core/GeographicTiling
 import CesiumMath from "terriajs-cesium/Source/Core/Math";
 import WebMercatorTilingScheme from "terriajs-cesium/Source/Core/WebMercatorTilingScheme";
 import type TIFFImageryProvider from "terriajs-tiff-imagery-provider";
+import type { SingleBandRenderOptions } from "terriajs-tiff-imagery-provider";
+import TerriaError from "../../../Core/TerriaError";
+import installCogGrayscaleBins from "../../../Map/ImageryProvider/CogGrayscaleBins";
 import CatalogMemberMixin from "../../../ModelMixins/CatalogMemberMixin";
 import MappableMixin, { MapItem } from "../../../ModelMixins/MappableMixin";
 import CogCatalogItemTraits from "../../../Traits/TraitsClasses/CogCatalogItemTraits";
 import { RectangleTraits } from "../../../Traits/TraitsClasses/MappableTraits";
+import LegendTraits, {
+  LegendItemTraits
+} from "../../../Traits/TraitsClasses/LegendTraits";
 import CreateModel from "../../Definition/CreateModel";
+import createStratumInstance from "../../Definition/createStratumInstance";
 import LoadableStratum from "../../Definition/LoadableStratum";
 import { BaseModel } from "../../Definition/Model";
 import StratumFromTraits from "../../Definition/StratumFromTraits";
@@ -50,6 +57,34 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
             ($) => $.models.cogCatalogItem.experimentalReprojectionWarning
           )
         : undefined;
+  }
+
+  @computed
+  get legends(): StratumFromTraits<LegendTraits>[] | undefined {
+    const { binEdges, binColors } = this.model.renderOptions.single ?? {};
+    if (!binEdges || !binColors || binEdges.length !== binColors.length + 1)
+      return undefined;
+
+    return [
+      createStratumInstance(LegendTraits, {
+        title: `Band ${this.model.renderOptions.single.band ?? 1}`,
+        items: binColors.map((color, i) =>
+          createStratumInstance(LegendItemTraits, {
+            color,
+            outlineColor: "#777777",
+            outlineWidth: 1,
+            title:
+              binColors.length === 1
+                ? "All valid values"
+                : i === 0
+                  ? `< ${binEdges[i + 1]}`
+                  : i === binColors.length - 1
+                    ? `>= ${binEdges[i]}`
+                    : `${binEdges[i]} <= value < ${binEdges[i + 1]}`
+          })
+        )
+      })
+    ];
   }
 
   @computed
@@ -172,6 +207,65 @@ export default class CogCatalogItem extends MappableMixin(
   private async createImageryProvider(
     url: string
   ): Promise<TIFFImageryProvider> {
+    const { band, domain, binEdges, binColors } =
+      this.renderOptions.single ?? {};
+    const hasBins = binEdges !== undefined || binColors !== undefined;
+    if (
+      hasBins &&
+      (!binEdges ||
+        !binColors ||
+        binEdges.length < 2 ||
+        binColors.length !== binEdges.length - 1 ||
+        !binEdges.every(
+          (edge, i) =>
+            Number.isFinite(edge) && (i === 0 || edge > binEdges[i - 1])
+        ) ||
+        !binColors.every((color) => /^#[0-9a-f]{6}$/i.test(color)) ||
+        domain !== undefined)
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "COG bins require ascending finite binEdges and one #RRGGBB binColor per interval, without domain."
+      });
+    }
+    let single: (SingleBandRenderOptions & { useWebGL?: boolean }) | undefined;
+    if (band !== undefined || domain !== undefined || hasBins) {
+      const bandIndex = band ?? 1;
+      if (!Number.isInteger(bandIndex) || bandIndex < 1) {
+        throw new TerriaError({
+          sender: this,
+          message: "renderOptions.single.band must be a positive integer."
+        });
+      }
+      if (
+        domain !== undefined &&
+        (domain.length !== 2 ||
+          !domain.every(Number.isFinite) ||
+          domain[0] >= domain[1])
+      ) {
+        throw new TerriaError({
+          sender: this,
+          message:
+            "renderOptions.single.domain must contain two finite values with minimum less than maximum."
+        });
+      }
+      if (this.renderOptions.convertToRGB === true) {
+        throw new TerriaError({
+          sender: this,
+          message:
+            "Single-band rendering cannot be combined with convertToRGB: true."
+        });
+      }
+      single = domain
+        ? { band: bandIndex, domain: [domain[0], domain[1]] }
+        : { band: bandIndex };
+      if (binEdges) {
+        single.domain = [binEdges[0], binEdges[binEdges.length - 1]];
+        single.useWebGL = false;
+      }
+    }
+
     // lazy load the imagery provider, only when needed
     const [{ default: TIFFImageryProvider }, { default: proj4 }] =
       await Promise.all([
@@ -179,7 +273,7 @@ export default class CogCatalogItem extends MappableMixin(
         import("proj4-fully-loaded")
       ]);
 
-    return runInAction(() =>
+    const provider = await runInAction(() =>
       TIFFImageryProvider.fromUrl(url, {
         credit: this.credit,
         tileSize: this.tileSize,
@@ -192,12 +286,21 @@ export default class CogCatalogItem extends MappableMixin(
         projFunc: this.reprojector(proj4),
         // make sure we omit `undefined` options so as not to override the library defaults
         renderOptions: omitUndefined({
+          single,
           nodata: this.renderOptions.nodata,
           convertToRGB: this.renderOptions.convertToRGB,
           resampleMethod: this.renderOptions.resampleMethod
         })
       })
     );
+    if (binEdges && binColors) {
+      installCogGrayscaleBins(
+        provider,
+        [...binEdges],
+        binColors.map((color) => parseInt(color.slice(1), 16))
+      );
+    }
+    return provider;
   }
 }
 
