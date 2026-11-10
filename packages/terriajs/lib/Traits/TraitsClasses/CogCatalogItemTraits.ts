@@ -23,9 +23,25 @@ export class CogSingleBandRenderOptionsTraits extends ModelTraits {
     type: "number",
     name: "Domain",
     description:
-      "Fixed grayscale stretch as [minimum, maximum], with two finite values and minimum less than maximum. If omitted, the range is determined from the TIFF."
+      "Fixed stretch as [minimum, maximum], with two finite values and minimum less than maximum. For custom continuous colors, use either domain or colorStops."
   })
   domain?: number[];
+
+  @primitiveArrayTrait({
+    type: "string",
+    name: "Continuous colors",
+    description:
+      "At least two opaque #RRGGBB colors, interpolated linearly in RGB. Requires colorStops or domain and cannot be combined with bins. Values outside the range use the nearest end color."
+  })
+  colors?: string[];
+
+  @primitiveArrayTrait({
+    type: "number",
+    name: "Color stops",
+    description:
+      "Strictly increasing finite sample values, one per continuous color. Supports uneven spacing. Requires colors and cannot be combined with domain or bins."
+  })
+  colorStops?: number[];
 
   @primitiveArrayTrait({
     type: "number",
@@ -39,7 +55,7 @@ export class CogSingleBandRenderOptionsTraits extends ModelTraits {
     type: "string",
     name: "Bin colors",
     description:
-      "Opaque colors in #RRGGBB format, one per interval in binEdges. Intervals include their lower edge but exclude their upper edge, except the final interval."
+      "Opaque colors in #RRGGBB format, one per nominal interval in binEdges. Uses the provider's discrete palette; sampled transitions may differ slightly from exact edges."
   })
   binColors?: string[];
 }

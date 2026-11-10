@@ -13,7 +13,6 @@ import WebMercatorTilingScheme from "terriajs-cesium/Source/Core/WebMercatorTili
 import type TIFFImageryProvider from "terriajs-tiff-imagery-provider";
 import type { SingleBandRenderOptions } from "terriajs-tiff-imagery-provider";
 import TerriaError from "../../../Core/TerriaError";
-import installCogGrayscaleBins from "../../../Map/ImageryProvider/CogGrayscaleBins";
 import CatalogMemberMixin from "../../../ModelMixins/CatalogMemberMixin";
 import MappableMixin, { MapItem } from "../../../ModelMixins/MappableMixin";
 import CogCatalogItemTraits from "../../../Traits/TraitsClasses/CogCatalogItemTraits";
@@ -61,7 +60,41 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
 
   @computed
   get legends(): StratumFromTraits<LegendTraits>[] | undefined {
-    const { binEdges, binColors } = this.model.renderOptions.single ?? {};
+    const { binEdges, binColors, colors, domain, colorStops } =
+      this.model.renderOptions.single ?? {};
+    const range = colorStops
+      ? [colorStops[0], colorStops[colorStops.length - 1]]
+      : domain;
+    if (
+      colors &&
+      range &&
+      colors.length >= 2 &&
+      colors.every((color) => /^#[0-9a-f]{6}$/i.test(color)) &&
+      range.length === 2 &&
+      range.every(Number.isFinite) &&
+      range[0] < range[1] &&
+      (!colorStops ||
+        (colorStops.length === colors.length &&
+          colorStops.every(
+            (value, i) =>
+              Number.isFinite(value) && (i === 0 || value > colorStops[i - 1])
+          )))
+    ) {
+      const stops = colors
+        .map(
+          (color, i) =>
+            `<stop offset="${colorStops ? (colorStops[i] - range[0]) / (range[1] - range[0]) : i / (colors.length - 1)}" stop-color="${color}"/>`
+        )
+        .join("");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="65" viewBox="0 0 240 65"><defs><linearGradient id="ramp" color-interpolation="sRGB">${stops}</linearGradient></defs><rect width="240" height="65" fill="white"/><rect x="12" y="10" width="216" height="20" fill="url(#ramp)" stroke="#777"/><g font-family="sans-serif" font-size="12" fill="black"><text x="12" y="50">${range[0]}</text><text x="228" y="50" text-anchor="end">${range[1]}</text></g></svg>`;
+      return [
+        createStratumInstance(LegendTraits, {
+          title: `Band ${this.model.renderOptions.single.band ?? 1}`,
+          url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+          urlMimeType: "image/svg+xml"
+        })
+      ];
+    }
     if (!binEdges || !binColors || binEdges.length !== binColors.length + 1)
       return undefined;
 
@@ -207,9 +240,40 @@ export default class CogCatalogItem extends MappableMixin(
   private async createImageryProvider(
     url: string
   ): Promise<TIFFImageryProvider> {
-    const { band, domain, binEdges, binColors } =
+    const { band, domain, binEdges, binColors, colors, colorStops } =
       this.renderOptions.single ?? {};
     const hasBins = binEdges !== undefined || binColors !== undefined;
+    if (
+      colorStops !== undefined &&
+      (!colors ||
+        colorStops.length < 2 ||
+        colorStops.length !== colors.length ||
+        !colorStops.every(
+          (value, i) =>
+            Number.isFinite(value) && (i === 0 || value > colorStops[i - 1])
+        ) ||
+        domain !== undefined ||
+        hasBins)
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "COG colorStops require ascending finite values, one per color, without domain or bins."
+      });
+    }
+    if (
+      colors !== undefined &&
+      (colors.length < 2 ||
+        !colors.every((color) => /^#[0-9a-f]{6}$/i.test(color)) ||
+        (domain === undefined && colorStops === undefined) ||
+        hasBins)
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "COG continuous colors require at least two #RRGGBB colors and either colorStops or domain, without bins."
+      });
+    }
     if (
       hasBins &&
       (!binEdges ||
@@ -229,8 +293,13 @@ export default class CogCatalogItem extends MappableMixin(
           "COG bins require ascending finite binEdges and one #RRGGBB binColor per interval, without domain."
       });
     }
-    let single: (SingleBandRenderOptions & { useWebGL?: boolean }) | undefined;
-    if (band !== undefined || domain !== undefined || hasBins) {
+    let single: SingleBandRenderOptions | undefined;
+    if (
+      band !== undefined ||
+      domain !== undefined ||
+      hasBins ||
+      colors !== undefined
+    ) {
       const bandIndex = band ?? 1;
       if (!Number.isInteger(bandIndex) || bandIndex < 1) {
         throw new TerriaError({
@@ -260,9 +329,34 @@ export default class CogCatalogItem extends MappableMixin(
       single = domain
         ? { band: bandIndex, domain: [domain[0], domain[1]] }
         : { band: bandIndex };
-      if (binEdges) {
+      if (binEdges && binColors) {
         single.domain = [binEdges[0], binEdges[binEdges.length - 1]];
-        single.useWebGL = false;
+        single.type = "discrete";
+        single.useRealValue = true;
+        single.colors = binColors.map((color, i): [number, string] => [
+          binEdges[i],
+          color
+        ]);
+      }
+      if (colors) {
+        single.type = "continuous";
+        single.useRealValue = true;
+        if (colorStops) {
+          single.domain = [colorStops[0], colorStops[colorStops.length - 1]];
+          single.colors = colors.map((color, i): [number, string] => [
+            colorStops[i],
+            color
+          ]);
+        } else if (domain) {
+          single.colors = colors.map((color, i): [number, string] => {
+            const fraction = i / (colors.length - 1);
+            return [(1 - fraction) * domain[0] + fraction * domain[1], color];
+          });
+        }
+      }
+      if (single.colors) {
+        single.clampLow = true;
+        single.clampHigh = true;
       }
     }
 
@@ -293,12 +387,13 @@ export default class CogCatalogItem extends MappableMixin(
         })
       })
     );
-    if (binEdges && binColors) {
-      installCogGrayscaleBins(
-        provider,
-        [...binEdges],
-        binColors.map((color) => parseInt(color.slice(1), 16))
-      );
+    if (single?.colors && !provider.plot?.gl) {
+      provider.destroy();
+      throw new TerriaError({
+        sender: this,
+        message:
+          "Custom COG color styles require WebGL with floating-point textures. Enable browser hardware acceleration or use an unstyled grayscale COG."
+      });
     }
     return provider;
   }
