@@ -162,9 +162,11 @@ Feature picking still uses original measurements. Rendering and NoData
 masking use the provider's native WebGL implementation, including its
 browser/GPU limitations. As with continuous colors, WebGL is required and a
 load error is reported if it is unavailable.
-In particular, NaN masking may fail in Chrome;
-for affected datasets replace NaN with a finite NoData sentinel and declare
-that sentinel in the TIFF or `renderOptions.nodata`.
+For native single-band WebGL rendering (including unstyled grayscale), TerriaJS
+replaces NaN with negative infinity only in the texture-upload copy. This uses
+the provider's transparent lower-bound shader branch and avoids unreliable
+NaN detection in Chrome. Source measurements and feature picking are unchanged;
+finite NoData values still use the provider's normal masking.
 Use nearest-neighbor resampling to avoid averaging measurements before
 palette mapping.
 As with continuous stretch, reload the item after changing rendering options.

@@ -116,6 +116,44 @@ describe("CogCatalogItem", function () {
     });
 
     describe("renderOptions", function () {
+      [
+        {},
+        { colorStops: [-70, 50], colors: ["#0000ff", "#ff0000"] },
+        { binEdges: [-70, 0, 50], binColors: ["#0000ff", "#ff0000"] }
+      ].forEach((style) => {
+        it(`masks NaN before native texture upload for ${JSON.stringify(style)}`, async function () {
+          requireFloatWebGL();
+          updateModelFromJson(item, CommonStrata.user, {
+            url: TEST_URLS["4326"],
+            renderOptions: {
+              nodata: -9999,
+              single: { band: 1, ...style }
+            }
+          }).throwIfError();
+          (await item.loadMapItems()).throwIfError();
+          const provider = getImageryProvider(item);
+          const plot = provider.plot!;
+          plot.removeAllDataset();
+          const samples = new Float64Array([NaN, -9999, -35, 25]);
+          plot.addDataset("b1", samples, 4, 1);
+          expect(plot.datasetCollection.b1.data[0]).toBe(-Infinity);
+          expect(Number.isNaN(samples[0])).toBe(true);
+          expect(samples[1]).toBe(-9999);
+          plot.renderDataset("b1");
+          const pixels = readPlotPixels(provider);
+          expect(pixels[3]).toBe(0);
+          expect(pixels[7]).toBe(0);
+          expect(pixels[11]).toBe(255);
+          expect(pixels[15]).toBe(255);
+          expect(plot.datasetCollection.b1.data[2]).toBe(-35);
+          const validSamples = new Float64Array([-35, 25]);
+          plot.removeAllDataset();
+          plot.addDataset("b1", validSamples, 2, 1);
+          expect(plot.datasetCollection.b1.data).toBe(validSamples);
+          provider.destroy();
+        });
+      });
+
       it("reports unavailable WebGL and destroys the unsupported provider", async function () {
         updateModelFromJson(item, CommonStrata.user, {
           url: TEST_URLS["4326"],

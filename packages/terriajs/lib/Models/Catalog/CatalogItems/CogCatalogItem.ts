@@ -395,6 +395,21 @@ export default class CogCatalogItem extends MappableMixin(
           "Custom COG color styles require WebGL with floating-point textures. Enable browser hardware acceleration or use an unstyled grayscale COG."
       });
     }
+    const plot = provider.plot;
+    if (plot?.gl) {
+      const addDataset = plot.addDataset.bind(plot);
+      plot.addDataset = (id, data, width, height) => {
+        // Avoid unreliable shader NaN checks in Chrome: negative infinity
+        // hits the provider's transparent lower-bound branch instead.
+        // Never mutate the source measurements.
+        const samples = data.some(Number.isNaN)
+          ? Float32Array.from(data, (value) =>
+              Number.isNaN(value) ? -Infinity : value
+            )
+          : data;
+        addDataset(id, samples, width, height);
+      };
+    }
     return provider;
   }
 }
