@@ -11,11 +11,17 @@ import GeographicTilingScheme from "terriajs-cesium/Source/Core/GeographicTiling
 import CesiumMath from "terriajs-cesium/Source/Core/Math";
 import WebMercatorTilingScheme from "terriajs-cesium/Source/Core/WebMercatorTilingScheme";
 import type TIFFImageryProvider from "terriajs-tiff-imagery-provider";
+import type { SingleBandRenderOptions } from "terriajs-tiff-imagery-provider";
+import TerriaError from "../../../Core/TerriaError";
 import CatalogMemberMixin from "../../../ModelMixins/CatalogMemberMixin";
 import MappableMixin, { MapItem } from "../../../ModelMixins/MappableMixin";
 import CogCatalogItemTraits from "../../../Traits/TraitsClasses/CogCatalogItemTraits";
 import { RectangleTraits } from "../../../Traits/TraitsClasses/MappableTraits";
+import LegendTraits, {
+  LegendItemTraits
+} from "../../../Traits/TraitsClasses/LegendTraits";
 import CreateModel from "../../Definition/CreateModel";
+import createStratumInstance from "../../Definition/createStratumInstance";
 import LoadableStratum from "../../Definition/LoadableStratum";
 import { BaseModel } from "../../Definition/Model";
 import StratumFromTraits from "../../Definition/StratumFromTraits";
@@ -50,6 +56,87 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
             ($) => $.models.cogCatalogItem.experimentalReprojectionWarning
           )
         : undefined;
+  }
+
+  @computed
+  get legends(): StratumFromTraits<LegendTraits>[] | undefined {
+    const {
+      binEdges,
+      binColors,
+      colors,
+      domain,
+      colorStops,
+      bandName,
+      forceSingleValueLegend
+    } = this.model.renderOptions.single ?? {};
+    const range = colorStops
+      ? [colorStops[0], colorStops[colorStops.length - 1]]
+      : domain;
+    if (
+      colors &&
+      range &&
+      colors.length >= 2 &&
+      colors.every((color) => /^#[0-9a-f]{6}$/i.test(color)) &&
+      range.length === 2 &&
+      range.every(Number.isFinite) &&
+      range[0] < range[1] &&
+      (!colorStops ||
+        (colorStops.length === colors.length &&
+          colorStops.every(
+            (value, i) =>
+              Number.isFinite(value) && (i === 0 || value > colorStops[i - 1])
+          )))
+    ) {
+      const stops = colors
+        .map(
+          (color, i) =>
+            `<stop offset="${colorStops ? (colorStops[i] - range[0]) / (range[1] - range[0]) : i / (colors.length - 1)}" stop-color="${color}"/>`
+        )
+        .join("");
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="65" viewBox="0 0 240 65"><defs><linearGradient id="ramp" color-interpolation="sRGB">${stops}</linearGradient></defs><rect width="240" height="65" fill="white"/><rect x="12" y="10" width="216" height="20" fill="url(#ramp)" stroke="#777"/><g font-family="sans-serif" font-size="12" fill="black"><text x="12" y="50">${range[0]}</text><text x="228" y="50" text-anchor="end">${range[1]}</text></g></svg>`;
+      return [
+        createStratumInstance(LegendTraits, {
+          title: `${bandName ?? "Band 1"}`,
+          url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+          urlMimeType: "image/svg+xml"
+        })
+      ];
+    }
+    if (!binEdges || !binColors || binEdges.length !== binColors.length + 1)
+      return undefined;
+
+    const items = forceSingleValueLegend
+      ? binColors.map((color, i) =>
+          createStratumInstance(LegendItemTraits, {
+            color,
+            outlineColor: "#777777",
+            outlineWidth: 1,
+            title:
+              binColors.length === 1 ? "All valid values" : `: ${binEdges[i]}`
+          })
+        )
+      : binColors.map((color, i) =>
+          createStratumInstance(LegendItemTraits, {
+            color,
+            outlineColor: "#777777",
+            outlineWidth: 1,
+            title:
+              binColors.length === 1
+                ? "All valid values"
+                : i === 0
+                  ? `< ${binEdges[i + 1]}`
+                  : i === binColors.length - 1
+                    ? `>= ${binEdges[i]}`
+                    : `${binEdges[i]} <= value < ${binEdges[i + 1]}`
+          })
+        );
+
+    return [
+      createStratumInstance(LegendTraits, {
+        title: `${bandName ?? "Band 1"}`,
+        items: items
+      })
+    ];
   }
 
   @computed
@@ -167,11 +254,159 @@ export default class CogCatalogItem extends MappableMixin(
   }
 
   /**
+   * Validate render options for COG items.
+   */
+  private validateRenderOptions(): void {
+    const { single, convertToRGB } = this.renderOptions;
+    const {
+      band,
+      domain,
+      binEdges,
+      binColors,
+      colors,
+      colorStops,
+      forceSingleValueLegend
+    } = single ?? {};
+    const hasBins = binEdges !== undefined || binColors !== undefined;
+
+    if (
+      colorStops !== undefined &&
+      (!colors ||
+        colorStops.length < 2 ||
+        colorStops.length !== colors.length ||
+        !colorStops.every(
+          (value, i) =>
+            Number.isFinite(value) && (i === 0 || value > colorStops[i - 1])
+        ) ||
+        domain !== undefined ||
+        hasBins)
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.colorStops require ascending finite values, one per color, without domain or bins."
+      });
+    }
+    if (
+      colors !== undefined &&
+      (colors.length < 2 ||
+        !colors.every((color) => /^#[0-9a-f]{6}$/i.test(color)) ||
+        (domain === undefined && colorStops === undefined) ||
+        hasBins)
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.colors require at least two #RRGGBB colors and either colorStops or domain, without bins."
+      });
+    }
+    if (forceSingleValueLegend && !binColors) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.forceSingleValueLegend: true is valid only in bin style and requires binColors."
+      });
+    }
+    if (
+      hasBins &&
+      (!binEdges ||
+        !binColors ||
+        binEdges.length < 2 ||
+        binColors.length !== binEdges.length - 1 ||
+        !binEdges.every(
+          (edge, i) =>
+            Number.isFinite(edge) && (i === 0 || edge > binEdges[i - 1])
+        ) ||
+        !binColors.every((color) => /^#[0-9a-f]{6}$/i.test(color)) ||
+        domain !== undefined)
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.binEdges requires ascending finite values and renderOptions.single.binColors requires one #RRGGBB value per interval, without domain."
+      });
+    }
+    if (band !== undefined && (!Number.isInteger(band) || band < 1)) {
+      throw new TerriaError({
+        sender: this,
+        message: "renderOptions.single.band must be a positive integer."
+      });
+    }
+    if (
+      domain !== undefined &&
+      (domain.length !== 2 ||
+        !domain.every(Number.isFinite) ||
+        domain[0] >= domain[1])
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.domain must contain two finite values with minimum less than maximum."
+      });
+    }
+    if (convertToRGB === true) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "Single-band rendering cannot be combined with convertToRGB: true."
+      });
+    }
+  }
+
+  /**
    * Create TIFFImageryProvider for the given url.
    */
   private async createImageryProvider(
     url: string
   ): Promise<TIFFImageryProvider> {
+    this.validateRenderOptions();
+    const { band, domain, binEdges, binColors, colors, colorStops } =
+      this.renderOptions.single ?? {};
+    let single: SingleBandRenderOptions | undefined;
+    if (
+      band !== undefined ||
+      domain !== undefined ||
+      binEdges !== undefined ||
+      binColors !== undefined ||
+      colors !== undefined
+    ) {
+      const bandIndex = band ?? 1;
+      if (domain) {
+        single = { band: bandIndex, domain: [domain[0], domain[1]] };
+      } else {
+        single = { band: bandIndex };
+      }
+      if (binEdges && binColors) {
+        single.domain = [binEdges[0], binEdges[binEdges.length - 1]];
+        single.type = "discrete";
+        single.useRealValue = true;
+        single.colors = binColors.map((color, i): [number, string] => [
+          binEdges[i],
+          color
+        ]);
+      }
+      if (colors) {
+        single.type = "continuous";
+        single.useRealValue = true;
+        if (colorStops) {
+          single.domain = [colorStops[0], colorStops[colorStops.length - 1]];
+          single.colors = colors.map((color, i): [number, string] => [
+            colorStops[i],
+            color
+          ]);
+        } else if (domain) {
+          single.colors = colors.map((color, i): [number, string] => {
+            const fraction = i / (colors.length - 1);
+            return [(1 - fraction) * domain[0] + fraction * domain[1], color];
+          });
+        }
+      }
+      if (single.colors) {
+        single.clampLow = true;
+        single.clampHigh = true;
+      }
+    }
+
     // lazy load the imagery provider, only when needed
     const [{ default: TIFFImageryProvider }, { default: proj4 }] =
       await Promise.all([
@@ -179,7 +414,7 @@ export default class CogCatalogItem extends MappableMixin(
         import("proj4-fully-loaded")
       ]);
 
-    return runInAction(() =>
+    const provider = await runInAction(() =>
       TIFFImageryProvider.fromUrl(url, {
         credit: this.credit,
         tileSize: this.tileSize,
@@ -192,12 +427,37 @@ export default class CogCatalogItem extends MappableMixin(
         projFunc: this.reprojector(proj4),
         // make sure we omit `undefined` options so as not to override the library defaults
         renderOptions: omitUndefined({
+          single,
           nodata: this.renderOptions.nodata,
           convertToRGB: this.renderOptions.convertToRGB,
           resampleMethod: this.renderOptions.resampleMethod
         })
       })
     );
+    if (single?.colors && !provider.plot?.gl) {
+      provider.destroy();
+      throw new TerriaError({
+        sender: this,
+        message:
+          "Custom COG color styles require WebGL with floating-point textures. Enable browser hardware acceleration or use an unstyled grayscale COG."
+      });
+    }
+    const plot = provider.plot;
+    if (plot?.gl) {
+      const addDataset = plot.addDataset.bind(plot);
+      plot.addDataset = (id, data, width, height) => {
+        // Avoid unreliable shader NaN checks in Chrome: negative infinity
+        // hits the provider's transparent lower-bound branch instead.
+        // Never mutate the source measurements.
+        const samples = data.some(Number.isNaN)
+          ? Float32Array.from(data, (value) =>
+              Number.isNaN(value) ? -Infinity : value
+            )
+          : data;
+        addDataset(id, samples, width, height);
+      };
+    }
+    return provider;
   }
 }
 

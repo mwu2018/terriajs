@@ -1,4 +1,5 @@
 import objectTrait from "../Decorators/objectTrait";
+import primitiveArrayTrait from "../Decorators/primitiveArrayTrait";
 import primitiveTrait from "../Decorators/primitiveTrait";
 import ModelTraits from "../ModelTraits";
 import { traitClass } from "../Trait";
@@ -10,7 +11,79 @@ import LegendOwnerTraits from "./LegendOwnerTraits";
 import MappableTraits from "./MappableTraits";
 import UrlTraits from "./UrlTraits";
 
+export class CogSingleBandRenderOptionsTraits extends ModelTraits {
+  @primitiveTrait({
+    type: "number",
+    name: "Band",
+    description: "The one-based band index to render. Defaults to 1."
+  })
+  band?: number;
+
+  @primitiveTrait({
+    type: "string",
+    name: "Band Name",
+    description: "The name of the band to render."
+  })
+  bandName?: string;
+
+  @primitiveArrayTrait({
+    type: "number",
+    name: "Domain",
+    description:
+      "Fixed stretch as [minimum, maximum], with two finite values and minimum less than maximum. For custom continuous colors, use either domain or colorStops."
+  })
+  domain?: number[];
+
+  @primitiveArrayTrait({
+    type: "string",
+    name: "Continuous colors",
+    description:
+      "At least two opaque #RRGGBB colors, interpolated linearly in RGB. Requires colorStops or domain and cannot be combined with bins. Values outside the range use the nearest end color."
+  })
+  colors?: string[];
+
+  @primitiveArrayTrait({
+    type: "number",
+    name: "Color stops",
+    description:
+      "Strictly increasing finite sample values, one per continuous color. Supports uneven spacing. Requires colors and cannot be combined with domain or bins."
+  })
+  colorStops?: number[];
+
+  @primitiveArrayTrait({
+    type: "number",
+    name: "Bin edges",
+    description:
+      "Strictly increasing finite bin edges. Requires one binColor per interval. Cannot be combined with domain. Values outside the edges use the nearest end color."
+  })
+  binEdges?: number[];
+
+  @primitiveArrayTrait({
+    type: "string",
+    name: "Bin colors",
+    description:
+      "Opaque colors in #RRGGBB format, one per nominal interval in binEdges. Uses the provider's discrete palette; sampled transitions may differ slightly from exact edges."
+  })
+  binColors?: string[];
+
+  @primitiveTrait({
+    type: "boolean",
+    name: "Force Single Value Legend",
+    description:
+      "Whether to force the legend to show a single value (left bin edge)."
+  })
+  forceSingleValueLegend?: boolean;
+}
+
 export class CogRenderOptionsTraits extends ModelTraits {
+  @objectTrait({
+    type: CogSingleBandRenderOptionsTraits,
+    name: "Single Band",
+    description:
+      "Single-band rendering options. Do not combine with convertToRGB: true."
+  })
+  single?: CogSingleBandRenderOptionsTraits;
+
   @primitiveTrait({
     type: "number",
     name: "No Data Value",
