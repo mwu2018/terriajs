@@ -19,6 +19,13 @@ export class CogSingleBandRenderOptionsTraits extends ModelTraits {
   })
   band?: number;
 
+  @primitiveTrait({
+    type: "string",
+    name: "Band Name",
+    description: "The name of the band to render."
+  })
+  bandName?: string;
+
   @primitiveArrayTrait({
     type: "number",
     name: "Domain",
@@ -58,6 +65,14 @@ export class CogSingleBandRenderOptionsTraits extends ModelTraits {
       "Opaque colors in #RRGGBB format, one per nominal interval in binEdges. Uses the provider's discrete palette; sampled transitions may differ slightly from exact edges."
   })
   binColors?: string[];
+
+  @primitiveTrait({
+    type: "boolean",
+    name: "Force Single Value Legend",
+    description:
+      "Whether to force the legend to show a single value (left bin edge)."
+  })
+  forceSingleValueLegend?: boolean;
 }
 
 export class CogRenderOptionsTraits extends ModelTraits {

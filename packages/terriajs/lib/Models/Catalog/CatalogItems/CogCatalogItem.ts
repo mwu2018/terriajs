@@ -60,8 +60,15 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
 
   @computed
   get legends(): StratumFromTraits<LegendTraits>[] | undefined {
-    const { binEdges, binColors, colors, domain, colorStops } =
-      this.model.renderOptions.single ?? {};
+    const {
+      binEdges,
+      binColors,
+      colors,
+      domain,
+      colorStops,
+      bandName,
+      forceSingleValueLegend
+    } = this.model.renderOptions.single ?? {};
     const range = colorStops
       ? [colorStops[0], colorStops[colorStops.length - 1]]
       : domain;
@@ -89,7 +96,7 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="65" viewBox="0 0 240 65"><defs><linearGradient id="ramp" color-interpolation="sRGB">${stops}</linearGradient></defs><rect width="240" height="65" fill="white"/><rect x="12" y="10" width="216" height="20" fill="url(#ramp)" stroke="#777"/><g font-family="sans-serif" font-size="12" fill="black"><text x="12" y="50">${range[0]}</text><text x="228" y="50" text-anchor="end">${range[1]}</text></g></svg>`;
       return [
         createStratumInstance(LegendTraits, {
-          title: `Band ${this.model.renderOptions.single.band ?? 1}`,
+          title: `${bandName ?? "Band 1"}`,
           url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
           urlMimeType: "image/svg+xml"
         })
@@ -98,10 +105,17 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
     if (!binEdges || !binColors || binEdges.length !== binColors.length + 1)
       return undefined;
 
-    return [
-      createStratumInstance(LegendTraits, {
-        title: `Band ${this.model.renderOptions.single.band ?? 1}`,
-        items: binColors.map((color, i) =>
+    const items = forceSingleValueLegend
+      ? binColors.map((color, i) =>
+          createStratumInstance(LegendItemTraits, {
+            color,
+            outlineColor: "#777777",
+            outlineWidth: 1,
+            title:
+              binColors.length === 1 ? "All valid values" : `: ${binEdges[i]}`
+          })
+        )
+      : binColors.map((color, i) =>
           createStratumInstance(LegendItemTraits, {
             color,
             outlineColor: "#777777",
@@ -115,7 +129,12 @@ class CogLoadableStratum extends LoadableStratum(CogCatalogItemTraits) {
                     ? `>= ${binEdges[i]}`
                     : `${binEdges[i]} <= value < ${binEdges[i + 1]}`
           })
-        )
+        );
+
+    return [
+      createStratumInstance(LegendTraits, {
+        title: `${bandName ?? "Band 1"}`,
+        items: items
       })
     ];
   }
