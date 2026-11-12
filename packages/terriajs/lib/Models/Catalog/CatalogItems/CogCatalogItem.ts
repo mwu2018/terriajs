@@ -254,14 +254,21 @@ export default class CogCatalogItem extends MappableMixin(
   }
 
   /**
-   * Create TIFFImageryProvider for the given url.
+   * Validate render options for COG items.
    */
-  private async createImageryProvider(
-    url: string
-  ): Promise<TIFFImageryProvider> {
-    const { band, domain, binEdges, binColors, colors, colorStops } =
-      this.renderOptions.single ?? {};
+  private validateRenderOptions(): void {
+    const { single, convertToRGB } = this.renderOptions;
+    const {
+      band,
+      domain,
+      binEdges,
+      binColors,
+      colors,
+      colorStops,
+      forceSingleValueLegend
+    } = single ?? {};
     const hasBins = binEdges !== undefined || binColors !== undefined;
+
     if (
       colorStops !== undefined &&
       (!colors ||
@@ -277,7 +284,7 @@ export default class CogCatalogItem extends MappableMixin(
       throw new TerriaError({
         sender: this,
         message:
-          "COG colorStops require ascending finite values, one per color, without domain or bins."
+          "renderOptions.single.colorStops require ascending finite values, one per color, without domain or bins."
       });
     }
     if (
@@ -290,7 +297,14 @@ export default class CogCatalogItem extends MappableMixin(
       throw new TerriaError({
         sender: this,
         message:
-          "COG continuous colors require at least two #RRGGBB colors and either colorStops or domain, without bins."
+          "renderOptions.single.colors require at least two #RRGGBB colors and either colorStops or domain, without bins."
+      });
+    }
+    if (forceSingleValueLegend && !binColors) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.forceSingleValueLegend: true is valid only in bin style and requires binColors."
       });
     }
     if (
@@ -309,45 +323,59 @@ export default class CogCatalogItem extends MappableMixin(
       throw new TerriaError({
         sender: this,
         message:
-          "COG bins require ascending finite binEdges and one #RRGGBB binColor per interval, without domain."
+          "renderOptions.single.binEdges requires ascending finite values and renderOptions.single.binColors requires one #RRGGBB value per interval, without domain."
       });
     }
+    if (band !== undefined && (!Number.isInteger(band) || band < 1)) {
+      throw new TerriaError({
+        sender: this,
+        message: "renderOptions.single.band must be a positive integer."
+      });
+    }
+    if (
+      domain !== undefined &&
+      (domain.length !== 2 ||
+        !domain.every(Number.isFinite) ||
+        domain[0] >= domain[1])
+    ) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "renderOptions.single.domain must contain two finite values with minimum less than maximum."
+      });
+    }
+    if (convertToRGB === true) {
+      throw new TerriaError({
+        sender: this,
+        message:
+          "Single-band rendering cannot be combined with convertToRGB: true."
+      });
+    }
+  }
+
+  /**
+   * Create TIFFImageryProvider for the given url.
+   */
+  private async createImageryProvider(
+    url: string
+  ): Promise<TIFFImageryProvider> {
+    this.validateRenderOptions();
+    const { band, domain, binEdges, binColors, colors, colorStops } =
+      this.renderOptions.single ?? {};
     let single: SingleBandRenderOptions | undefined;
     if (
       band !== undefined ||
       domain !== undefined ||
-      hasBins ||
+      binEdges !== undefined ||
+      binColors !== undefined ||
       colors !== undefined
     ) {
       const bandIndex = band ?? 1;
-      if (!Number.isInteger(bandIndex) || bandIndex < 1) {
-        throw new TerriaError({
-          sender: this,
-          message: "renderOptions.single.band must be a positive integer."
-        });
+      if (domain) {
+        single = { band: bandIndex, domain: [domain[0], domain[1]] };
+      } else {
+        single = { band: bandIndex };
       }
-      if (
-        domain !== undefined &&
-        (domain.length !== 2 ||
-          !domain.every(Number.isFinite) ||
-          domain[0] >= domain[1])
-      ) {
-        throw new TerriaError({
-          sender: this,
-          message:
-            "renderOptions.single.domain must contain two finite values with minimum less than maximum."
-        });
-      }
-      if (this.renderOptions.convertToRGB === true) {
-        throw new TerriaError({
-          sender: this,
-          message:
-            "Single-band rendering cannot be combined with convertToRGB: true."
-        });
-      }
-      single = domain
-        ? { band: bandIndex, domain: [domain[0], domain[1]] }
-        : { band: bandIndex };
       if (binEdges && binColors) {
         single.domain = [binEdges[0], binEdges[binEdges.length - 1]];
         single.type = "discrete";
